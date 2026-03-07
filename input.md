@@ -36,21 +36,11 @@ Heterogeneous REST payloads (`rest.scalar.v1`, `rest.chemistry.v1`, etc.) are fl
 ```
 
 ### 2.2 Command Schema (Actuators)
-When an automation rule evaluates to true , or a manual override is requested from the dashboard, the system generates a standardized command to invoke the actuator API.
+To communicate effectively with the legacy simulator API, the system bypasses complex wrappers and directly issues state override commands mapping directly to the actuator's expected POST payload.
 
 ```json
 {
-  "command_id": "string (UUID v4)",
-  "timestamp": "string (ISO-8601)",
-  "target": {
-    "actuator_id": "string (Unique ID)",
-    "action": "string"
-  },
-  "params": {
-    "value": "dynamic (number/boolean/string)",
-    "duration": "number (optional, seconds)"
-  },
-  "issued_by": "string"
+  "state": "string (ON/OFF)"
 }
 ```
 
@@ -83,7 +73,7 @@ AresGuard implements a persistent rule engine that evaluates conditions dynamica
 | **US01** | Mission Specialist | **As a** Mission Specialist, **I want to** view the continuously updated temperature of the greenhouse **so that** I can monitor crop health without manually refreshing the dashboard. | **AC:** The dashboard must display the latest temperature value. <br>**NFR:** The ingestion service must fetch data via scheduled REST polling from the simulator, while the dashboard will receive these updates automatically via WebSocket from an in-memory cached state, without requiring any further operation. |
 | **US02** | Mission Specialist | **As a** Mission Specialist, **I want to** check the current water tank level on the dashboard **so that** I know how much water is left for hydroponic irrigation. | **AC:** The system must automatically read and display the current water level. <br>**NFR:** The system must poll the `water_tank_level` REST sensor. |
 | **US03** | Mission Specialist | **As a** Mission Specialist, **I want** a dedicated button to manually turn on the hall ventilation **so that** I can rapidly cycle the air if I detect smoke or stale air. | **AC:** The UI must provide an interactive control to activate the ventilation and visually confirm the action. <br>**NFR:** The action must trigger a REST POST request to the actuator API. |
-| **US04** | Mission Specialist | **As a** Mission Specialist, **I want** the dashboard to visually highlight critical CO2 levels in red and trigger a system-wide warning when the concentration exceeds 1000 ppm, **so that** I can immediately take safety measures or evacuate the hall. | **AC:** The system must monitor the co2_hall sensor value in real-time.If the value is below 1000 ppm, the status indicator must remain Green (Normal).f the value exceeds 1000 ppm, the specific sensor card must change its border/background to Red and the status text must switch to "CRITICAL". <br>**NFR:** The alert logic must be processed on the frontend based on the data fetched from the rest.scalar.v1 sensor schema. |
+| **US04** | Mission Specialist | **As a** Mission Specialist, **I want** the dashboard to visually highlight critical CO2 levels in red and trigger a system-wide warning when the concentration exceeds 1000 ppm, **so that** I can immediately take safety measures or evacuate the hall. | **AC:** The system must monitor the co2_hall sensor value in real-time. If the value is below 1000 ppm, the status indicator must remain Green (Normal). If the value exceeds 1000 ppm, the specific sensor card must change its border/background to Red and the status text must switch to "CRITICAL". <br>**NFR:** The alert logic must be processed on the frontend based on the data fetched from the rest.scalar.v1 sensor schema. |
 | **US05** | Automation Engineer | **As an** Automation Engineer, **I want** the system to continuously gather data from all available sensors **so that** the automation logic always evaluates the most recent habitat conditions. | **AC:** The system must ingest readings from all connected devices without manual triggers. <br>**NFR:** An ingestion microservice must poll the endpoints listed in `/api/sensors`. |
 | **US06** | Automation Engineer | **As an** Automation Engineer, **I want to** automatically convert all incoming sensor data into a single, unified format **so that** the core system logic is decoupled from specific device dialects. | **AC:** All metrics must be mapped to a standard structure regardless of their original source. <br>**NFR:** The ingestion service must normalize heterogeneous payloads into the standard internal schema and update the central system state (In-Memory Cache/DB). |
 | **US07** | Automation Engineer | **As an** Automation Engineer, **I want to** define an automatic rule that turns on the hall ventilation if the CO2 level exceeds a safe threshold **so that** dangerous carbon dioxide buildup is prevented. | **AC:** The system must allow the creation of automated conditional responses for CO2 levels. <br>**NFR:** The rule engine must support `IF co2_hall > [value] THEN set hall_ventilation to ON` logic. |

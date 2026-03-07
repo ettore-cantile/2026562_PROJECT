@@ -2,14 +2,16 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>ARESGUARD: MISSION CONTROL</title>
-    <link rel="stylesheet" href="../css/style.css">
+    <title>Welcome to Mars. Please Don’t Die.</title>
+    <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
     <div id="boot-overlay">
         <div class="boot-terminal">
             <h1>SYSTEM BOOT SEQUENCE</h1>
-            <div id="boot-log">Initializing...</div>
+            <div id="boot-log">
+                Initializing the system<span class="bouncing-dots"><span>.</span><span>.</span><span>.</span></span>
+            </div>
             <div class="progress-bar"><div class="progress-fill" id="boot-progress"></div></div>
         </div>
     </div>
@@ -84,6 +86,6 @@
         <div id="log-console"></div>
     </main>
 
-    <script src="../js/script.js"></script>
+    <script src="js/script.js"></script>
 </body>
 </html>

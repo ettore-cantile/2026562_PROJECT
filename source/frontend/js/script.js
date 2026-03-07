@@ -1,25 +1,23 @@
-/**
- * ARESGUARD MISSION CONTROL - UPDATED LOGIC
- */
+const host = window.location.hostname;
 
 const ENDPOINTS = {
-    WS: "ws://localhost:8000/ws",
-    API: "http://localhost:8000/api/commands"
+    WS: `ws://${host}:8000/ws`,
+    API: `http://${host}:8000/api/commands`
 };
 
 const SENSORS_REGISTRY = [
-    { id: 'greenhouse_temperature', label: 'Greenhouse Temp', unit: '°C', min: 0, max: 40 },
-    { id: 'entrance_humidity', label: 'Entrance Humidity', unit: '%', min: 0, max: 100 },
-    { id: 'co2_hall', label: 'CO2 Hall Level', unit: 'ppm', min: 400, max: 2000 },
-    { id: 'corridor_pressure', label: 'Corridor Pressure', unit: 'kPA', min: 90, max: 115 },
-    { id: 'water_tank_level', label: 'Water Tank Level', unit: '%', min: 0, max: 100 },
-    { id: 'water_tank_liters', label: 'Water Tank Vol', unit: 'L', min: 0, max: 3000 },
-    { id: 'hydroponic_ph', label: 'Hydroponic pH', unit: 'pH', min: 4.0, max: 9.0 },
-    { id: 'air_quality_pm25', label: 'PM 2.5 Level', unit: 'µg', min: 0, max: 50 },
-    { id: 'air_quality_pm1', label: 'PM 1.0 Level', unit: 'µg', min: 0, max: 30 },
-    { id: 'air_quality_pm10', label: 'PM 10 Level', unit: 'µg', min: 0, max: 60 },
-    { id: 'air_quality_voc', label: 'Volatile Org. Comp', unit: 'ppb', min: 0, max: 600 },
-    { id: 'air_quality_co2e', label: 'CO2 Equivalent', unit: 'ppm', min: 400, max: 1500 }
+    { id: 'greenhouse_temperature_value', label: 'Greenhouse Temp', unit: '°C', min: 0, max: 40 },
+    { id: 'entrance_humidity_value', label: 'Entrance Humidity', unit: '%', min: 0, max: 100 },
+    { id: 'co2_hall_value', label: 'CO2 Hall Level', unit: 'ppm', min: 400, max: 1000 },
+    { id: 'corridor_pressure_value', label: 'Corridor Pressure', unit: 'kPA', min: 90, max: 115 },
+    { id: 'water_tank_level_level_pct', label: 'Water Tank Level', unit: '%', min: 0, max: 100 },
+    { id: 'water_tank_level_level_liters', label: 'Water Tank Vol', unit: 'L', min: 0, max: 3000 },
+    { id: 'hydroponic_ph_ph', label: 'Hydroponic pH', unit: 'pH', min: 4.0, max: 9.0 },
+    { id: 'air_quality_pm25_pm25_ug_m3', label: 'PM 2.5 Level', unit: 'µg', min: 0, max: 50 },
+    { id: 'air_quality_pm25_pm1_ug_m3', label: 'PM 1.0 Level', unit: 'µg', min: 0, max: 30 },
+    { id: 'air_quality_pm25_pm10_ug_m3', label: 'PM 10 Level', unit: 'µg', min: 0, max: 60 },
+    { id: 'air_quality_voc_voc_ppb', label: 'Volatile Org. Comp', unit: 'ppb', min: 0, max: 600 },
+    { id: 'air_quality_voc_co2e_ppm', label: 'CO2 Equivalent', unit: 'ppm', min: 400, max: 1500 }
 ];
 
 const ACTUATOR_IDS = ['cooling_fan', 'habitat_heater', 'hall_ventilation', 'entrance_humidifier'];
@@ -31,6 +29,7 @@ let systemState = {
 };
 
 function initMissionControl() {
+    document.body.classList.add('no-scroll');
     renderGrid();
     connect();
 }
@@ -81,28 +80,36 @@ function connect() {
     socket.onmessage = (event) => {
         try {
             const msg = JSON.parse(event.data);
-            if (msg.type === "PING") return;
-
-            const data = msg.data || msg;
-
-            Object.keys(data).forEach(key => {
-                const entry = data[key];
-                let value = entry.payload ? entry.payload.value : (entry.value !== undefined ? entry.value : entry);
-
-                if (ACTUATOR_IDS.includes(key)) {
-                    syncActuator(key, value);
-                } else {
-                    updateSensor(key, value);
-                    systemState.sensorsReceived.add(key);
-                }
-            });
-            checkBootSequence();
-        } catch(e) {
-            console.error("Message Processing Error:", e);
-        }
+            
+            if (msg.type === "FULL_STATE") {
+                const items = Object.values(msg.data);
+                items.forEach((entry, index) => {
+                    setTimeout(() => {
+                        processEventData(entry);
+                        checkBootSequence();
+                    }, index * 150); 
+                });
+            } else if (msg.type === "LIVE_UPDATE") {
+                processEventData(msg.data);
+                checkBootSequence();
+            }
+        } catch(e) {}
     };
 
     socket.onclose = () => setTimeout(connect, 3000);
+}
+
+function processEventData(entry) {
+    if (!entry || !entry.source || !entry.payload) return;
+    const id = entry.source.identifier;
+    const value = entry.payload.value;
+
+    if (ACTUATOR_IDS.includes(id)) {
+        syncActuator(id, value);
+    } else {
+        updateSensor(id, value);
+        systemState.sensorsReceived.add(id);
+    }
 }
 
 function updateSensor(id, val) {
@@ -111,7 +118,6 @@ function updateSensor(id, val) {
 
     const valStr = typeof val === 'number' ? val.toFixed(1) : val;
     
-    // UI Elements Update with Null Guards
     const elPrim = document.getElementById(`val-${id}`);
     const elSec = document.getElementById(`val-sec-${id}`);
     if (elPrim) elPrim.innerText = valStr;
@@ -148,7 +154,6 @@ function updateSensor(id, val) {
         else card.classList.remove('card-alert');
     }
 
-    // Critical Banner Guard
     const banner = document.getElementById('critical-banner');
     if (banner) {
         banner.style.display = document.querySelector('.card-alert') ? 'block' : 'none';
@@ -160,33 +165,57 @@ function syncActuator(id, rawState) {
     if (newState === "TRUE" || newState === "ON" || newState === "1") newState = "ON";
     else newState = "OFF";
 
-    if (systemState.actuators[id] === newState) return;
-    systemState.actuators[id] = newState;
-
     const toggle = document.getElementById(`toggle-${id}`);
-    if (toggle) toggle.checked = (newState === "ON");
+    if (toggle) {
+        toggle.checked = (newState === "ON");
+        toggle.disabled = false; 
+        if (toggle.nextElementSibling) {
+            toggle.nextElementSibling.style.opacity = "1"; 
+        }
+    }
 
     const statusText = document.getElementById(`status-text-${id}`);
     if (statusText) {
-        statusText.innerText = `STATUS: ${newState}`;
-        statusText.style.color = (newState === "ON") ? "#22c55e" : "#555";
+        const color = (newState === "ON") ? "#22c55e" : "#555"; 
+        statusText.innerHTML = `STATUS: <span style="color: ${color}">${newState}</span>`;
     }
 
-    addLog(`System Confirmed: ${id} is ${newState}`, "#f59e0b");
+    if (systemState.actuators[id] !== newState) {
+        systemState.actuators[id] = newState;
+        addLog(`System Confirmed: ${id} is ${newState}`, "#f59e0b");
+    }
+
+    document.body.style.cursor = 'default';
 }
 
 async function manualToggle(id, isChecked) {
+    const toggle = document.getElementById(`toggle-${id}`);
+    const currentState = systemState.actuators[id] === "ON";
+    toggle.checked = currentState;
+
+    toggle.disabled = true;
+    if (toggle.nextElementSibling) {
+        toggle.nextElementSibling.style.opacity = "0.5";
+    }
+
+    document.body.style.cursor = 'wait';
+
     const newState = isChecked ? "ON" : "OFF";
-    addLog(`Manual CMD: Setting ${id} to ${newState}`, "#3b82f6");
+    addLog(`Manual CMD: Transmitting ${newState} to ${id}...`, "#3b82f6");
+    
     try {
         await fetch(`${ENDPOINTS.API}/${id}`, {
             method: 'POST', 
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ state: newState }) // Matching Ingestion/Gateway requirements
+            body: JSON.stringify({ state: newState })
         });
     } catch (e) {
         addLog(`Link Failure: ${id} command lost.`, "#ef4444");
-        document.getElementById(`toggle-${id}`).checked = !isChecked;
+        toggle.disabled = false;
+        if (toggle.nextElementSibling) {
+            toggle.nextElementSibling.style.opacity = "1";
+        }
+        document.body.style.cursor = 'default';
     }
 }
 
@@ -198,7 +227,7 @@ function checkBootSequence() {
     const log = document.getElementById('boot-log');
 
     if (bar) bar.style.width = `${(count / total) * 100}%`;
-    if (log) log.innerText = `Loading Modules... (${count}/${total})`;
+    if (log) log.innerHTML = `Loading Modules<span class="bouncing-dots"><span>.</span><span>.</span><span>.</span></span> (${count}/${total})`;
 
     if (count >= 5) {
         systemState.booted = true;
@@ -207,6 +236,7 @@ function checkBootSequence() {
             overlay.style.opacity = '0';
             setTimeout(() => { 
                 overlay.style.display = 'none'; 
+                document.body.classList.remove('no-scroll');
                 addLog("AresGuard Online. Mission Active.", "#22c55e");
             }, 800);
         }

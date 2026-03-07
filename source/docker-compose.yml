@@ -45,17 +45,17 @@ services:
       POSTGRES_DB: aresguard
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - aresguard_net
     healthcheck:
-      # FIX: Updated user and db name to match environment
       test: ["CMD-SHELL", "pg_isready -U ares -d aresguard"]
       interval: 10s
       timeout: 5s
       retries: 5
-  # =========================================================
-  # CUSTOM MICROSERVICES (To be uncommented in the next steps)
-  # =========================================================
+  # ---------------------------------------------------------
+  # CUSTOM MICROSERVICES
+  # ---------------------------------------------------------
   ingestion:
      build: ./ingestion
      container_name: aresguard_ingestion
