@@ -38,6 +38,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 async def consume_rabbitmq():
+    print(f"[GATEWAY] Connecting to RabbitMQ at {BROKER_HOST}...", flush=True)
     while True:
         try:
             connection = await aio_pika.connect_robust(
@@ -45,29 +46,20 @@ async def consume_rabbitmq():
             )
             async with connection:
                 channel = await connection.channel()
-                
-                exchange = await channel.declare_exchange(
-                    EXCHANGE_NAME, 
-                    aio_pika.ExchangeType.FANOUT, 
-                    durable=True
-                )
-                
+                exchange = await channel.declare_exchange(EXCHANGE_NAME, aio_pika.ExchangeType.FANOUT, durable=True)
                 queue = await channel.declare_queue('', exclusive=True)
                 await queue.bind(exchange)
+                print("[GATEWAY] RabbitMQ Connected & Listening!", flush=True)
                 
                 async with queue.iterator() as queue_iter:
                     async for message in queue_iter:
                         async with message.process():
                             event = json.loads(message.body.decode())
                             sensor_id = event["source"]["identifier"]
-                            
                             sensor_state_cache[sensor_id] = event
-                            
-                            await manager.broadcast({
-                                "type": "LIVE_UPDATE",
-                                "data": event
-                            })
-        except Exception:
+                            await manager.broadcast({"type": "LIVE_UPDATE", "data": event})
+        except Exception as e:
+            print(f"[GATEWAY ERR] RabbitMQ Error: {e}", flush=True)
             await asyncio.sleep(5)
 
 @asynccontextmanager
@@ -93,6 +85,30 @@ def read_root():
 @app.get("/api/state")
 def get_state():
     return sensor_state_cache
+
+# --- DEBUG PROXY ENDPOINT ---
+@app.get("/api/sensors/{sensor_id}")
+def get_sensor_data(sensor_id: str):
+    # Logga l'URL che stiamo provando a chiamare
+    target_url = SIMULATOR_URL.replace("actuators", "sensors") + f"/{sensor_id}"
+    
+    print(f"[PROXY DEBUG] Frontend asked for: {sensor_id}", flush=True)
+    print(f"[PROXY DEBUG] Target Internal URL: {target_url}", flush=True)
+    
+    try:
+        resp = requests.get(target_url, timeout=3)
+        print(f"[PROXY DEBUG] Simulator Status: {resp.status_code}", flush=True)
+        
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            print(f"[PROXY ERROR] Simulator returned error: {resp.text}", flush=True)
+            raise HTTPException(status_code=resp.status_code, detail="Simulator Error")
+            
+    except Exception as e:
+        print(f"[PROXY CRITICAL] Connection failed: {e}", flush=True)
+        # Rilancia l'errore per vederlo nel frontend
+        raise HTTPException(status_code=500, detail=f"Proxy Error: {str(e)}")
 
 @app.post("/api/commands/{actuator_id}")
 def send_command(actuator_id: str, command: dict):
