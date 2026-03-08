@@ -4,7 +4,7 @@ const ENDPOINTS = {
     WS: `ws://${host}:8000/ws`,
     API: `http://${host}:8000/api/commands`,
     SIMULATOR: `http://${host}:8080/api/sensors`,
-    RULES: `http://${host}:8000/api/rules`
+    RULES: `http://${host}:8001/api/rules`
 };
 
 const SENSORS_REGISTRY = [
@@ -26,6 +26,8 @@ const ACTUATOR_IDS = ['cooling_fan', 'habitat_heater', 'hall_ventilation', 'entr
 
 let systemState = { booted: false, sensorsReceived: new Set(), actuators: {}, criticalSensors: new Set() };
 let bootStartTime;
+let currentRulesList = []; 
+let editingRuleId = null; // TRACCIA L'ID DELLA REGOLA IN MODIFICA
 
 function initMissionControl() {
     bootStartTime = Date.now();
@@ -73,13 +75,23 @@ function renderEngineerViews() {
     }
 
     const sensorSelect = document.getElementById('rule-sensor');
+    const valueInput = document.getElementById('rule-value');
+    
     if (sensorSelect) {
-        sensorSelect.innerHTML = SENSORS_REGISTRY.map(s => `<option value="${s.id}">${s.id}</option>`).join('');
-        sensorSelect.onchange = (e) => {
-            const sel = SENSORS_REGISTRY.find(x => x.id === e.target.value);
-            document.getElementById('rule-unit').innerText = sel ? sel.unit : '';
+        sensorSelect.innerHTML = SENSORS_REGISTRY.map(s => `<option value="${s.simId}">${s.label}</option>`).join('');
+        
+        const updateInputLimits = () => {
+            const sel = SENSORS_REGISTRY.find(x => x.simId === sensorSelect.value);
+            if (sel) {
+                document.getElementById('rule-unit').innerText = sel.unit;
+                valueInput.min = sel.min;
+                valueInput.max = sel.max;
+                valueInput.placeholder = `${sel.min} - ${sel.max}`;
+            }
         };
-        document.getElementById('rule-unit').innerText = SENSORS_REGISTRY[0].unit;
+
+        sensorSelect.onchange = updateInputLimits;
+        updateInputLimits(); 
     }
 
     const actuatorSelect = document.getElementById('rule-actuator');
@@ -88,23 +100,152 @@ function renderEngineerViews() {
     }
 }
 
+// --- FUNZIONE SAVE/UPDATE UNIFICATA ---
+async function saveRule() {
+    const sensorSimId = document.getElementById('rule-sensor').value;
+    const operator = document.getElementById('rule-operator').value;
+    const thresholdVal = document.getElementById('rule-value').value;
+    const actuator = document.getElementById('rule-actuator').value;
+    const action = document.getElementById('rule-action').value;
+    
+    const threshold = parseFloat(thresholdVal);
+    
+    if (isNaN(threshold)) { 
+        alert("⚠️ Please enter a valid number."); 
+        return; 
+    }
+
+    // VALIDAZIONE RANGE
+    const config = SENSORS_REGISTRY.find(s => s.simId === sensorSimId);
+    if (config) {
+        if (threshold < config.min || threshold > config.max) {
+            alert(`⚠️ INVALID VALUE!\n\nThe allowed range for ${config.label} is ${config.min} to ${config.max}.\nYou entered: ${threshold}`);
+            return;
+        }
+    }
+    
+    const rule = { sensor_id: sensorSimId, operator: operator, threshold: threshold, actuator_id: actuator, action: action };
+    
+    try {
+        // SE SIAMO IN EDIT MODE, CANCELLIAMO PRIMA LA VECCHIA REGOLA
+        if (editingRuleId) {
+            await fetch(`${ENDPOINTS.RULES}/${editingRuleId}`, { method: 'DELETE' });
+        }
+
+        // SALVIAMO LA NUOVA
+        const res = await fetch(ENDPOINTS.RULES, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(rule)
+        });
+        
+        if(!res.ok) throw new Error();
+        
+        fetchRules();
+        
+        const msg = editingRuleId 
+            ? "✅ RULE UPDATED SUCCESSFULLY!" 
+            : "✅ NEW RULE CREATED SUCCESSFULLY!";
+            
+        addLog(`Rule Configured: ${sensorSimId} ${operator} ${threshold}`, "#22c55e");
+        alert(msg);
+
+        // RESET UI DOPO IL SALVATAGGIO
+        resetEditMode();
+        
+    } catch (e) {
+        alert("Failed to save rule. Check backend.");
+    }
+}
+
+// --- GESTIONE EDIT MODE ---
+function editRule(ruleId) {
+    const rule = currentRulesList.find(r => r.rule_id == ruleId);
+    if (!rule) return;
+
+    // Imposta stato di editing
+    editingRuleId = ruleId;
+
+    // Popola il form
+    document.getElementById('rule-sensor').value = rule.sensor_id;
+    document.getElementById('rule-sensor').onchange(); // Trigger per unità e limiti
+    
+    document.getElementById('rule-operator').value = rule.operator;
+    document.getElementById('rule-value').value = rule.threshold;
+    document.getElementById('rule-actuator').value = rule.actuator_id;
+    document.getElementById('rule-action').value = rule.action;
+
+    // Cambia il bottone per indicare l'update
+    const saveBtn = document.querySelector('.btn-save');
+    saveBtn.innerText = "↻ UPDATE RULE";
+    saveBtn.style.background = "#3b82f6"; // Blu
+
+    // Scroll al form
+    document.querySelector('.rule-creation-card').scrollIntoView({ behavior: 'smooth' });
+}
+
+function resetEditMode() {
+    editingRuleId = null;
+    const saveBtn = document.querySelector('.btn-save');
+    saveBtn.innerText = "+ SAVE TO DB";
+    saveBtn.style.background = "#22c55e"; // Verde
+    document.getElementById('rule-value').value = "";
+}
+
+async function fetchRules() {
+    try { 
+        const res = await fetch(ENDPOINTS.RULES); 
+        if(!res.ok) throw new Error(); 
+        currentRulesList = await res.json(); 
+        renderRules(currentRulesList); 
+    } catch (e) { 
+        document.getElementById('rules-tbody').innerHTML = `<tr><td colspan="4" style="text-align:center; color:#ef4444;">Connection Error.</td></tr>`; 
+    }
+}
+
+function renderRules(rules) {
+    const tbody = document.getElementById('rules-tbody'); 
+    if (!tbody) return;
+    if (rules.length === 0) { 
+        tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;">No automation rules active.</td></tr>`; 
+        return; 
+    }
+    tbody.innerHTML = rules.map(r => `
+        <tr>
+            <td style="color:#f59e0b;">${r.rule_id}</td>
+            <td>IF <strong>${r.sensor_id}</strong> ${r.operator} ${r.threshold}</td>
+            <td>SET <strong>${r.actuator_id}</strong> to <span style="color:${r.action === 'ON' ? '#22c55e' : '#555'}; font-weight:bold;">${r.action}</span></td>
+            <td>
+                <button class="btn-edit" onclick="editRule('${r.rule_id}')">! EDIT</button>
+                <button class="btn-del" onclick="deleteRule('${r.rule_id}')">\\ DELETE</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function deleteRule(id) { 
+    if(!confirm(`Delete rule ${id}?`)) return; 
+    try { 
+        await fetch(`${ENDPOINTS.RULES}/${id}`, { method: 'DELETE' }); 
+        fetchRules(); 
+        addLog(`Rule ${id} removed.`, "#ef4444"); 
+        
+        // Se stavo editando proprio quella regola, resetto il form
+        if (editingRuleId == id) resetEditMode();
+        
+    } catch (e) { console.error(e); } 
+}
+
 function connect() {
     const socket = new WebSocket(ENDPOINTS.WS);
-    socket.onopen = () => {
-        const statusEl = document.getElementById('conn-status');
-        if (statusEl) { statusEl.innerText = "ONLINE"; statusEl.style.color = "#22c55e"; }
-    };
+    socket.onopen = () => { document.getElementById('conn-status').innerText = "ONLINE"; document.getElementById('conn-status').style.color = "#22c55e"; };
     socket.onmessage = (event) => {
         try {
             const msg = JSON.parse(event.data);
             if (msg.type === "FULL_STATE") {
-                const items = Object.values(msg.data);
-                items.forEach((entry, index) => {
-                    setTimeout(() => { processEventData(entry); checkBootSequence(); }, index); 
-                });
+                Object.values(msg.data).forEach((entry, index) => setTimeout(() => { processEventData(entry); checkBootSequence(); }, index));
             } else if (msg.type === "LIVE_UPDATE") {
-                processEventData(msg.data);
-                checkBootSequence();
+                processEventData(msg.data); checkBootSequence();
             }
         } catch(e) {}
     };
@@ -112,43 +253,31 @@ function connect() {
 }
 
 function processEventData(entry) {
-    if (!entry || !entry.source || !entry.payload) return;
+    if (!entry || !entry.source) return;
     const id = entry.source.identifier;
     const value = entry.payload.value;
-
     appendRawLog(entry);
-
     if (ACTUATOR_IDS.includes(id)) syncActuator(id, value);
-    else { updateSensor(id, value); systemState.sensorsReceived.add(id); }
+    else {
+        const regEntry = SENSORS_REGISTRY.find(s => s.simId === id);
+        const targetId = regEntry ? regEntry.id : id;
+        updateSensor(targetId, value);
+        systemState.sensorsReceived.add(targetId);
+    }
 }
 
 function appendRawLog(entry, isCommand = false) {
     const log = document.getElementById('raw-log-console');
     if (!log) return;
-    
     const time = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
-    
-    const blockType = isCommand ? "cmd" : "tel";
-    const blockId = `${time}-${blockType}`;
-    
+    const blockId = `${time}-${isCommand ? "cmd" : "tel"}`;
     const firstChild = log.firstElementChild;
-    if (firstChild && firstChild.dataset.blockId === blockId) {
-        const pre = document.createElement('pre');
-        pre.textContent = JSON.stringify(entry, null, 2);
-        firstChild.appendChild(pre);
-        return;
-    }
-
+    if (firstChild && firstChild.dataset.blockId === blockId) return;
+    
     const row = document.createElement('div');
     row.className = "raw-log-entry";
     row.dataset.blockId = blockId; 
-    
-    const prefix = isCommand 
-        ? `<span style="color:#f59e0b; font-weight:bold;">> [${time}] Outbound Actuator Command:</span>` 
-        : `<span style="color:#22c55e; font-weight:bold;">> [${time}] Normalized Telemetry:</span>`;
-    
-    row.innerHTML = `${prefix} <pre>${JSON.stringify(entry, null, 2)}</pre>`;
-    
+    row.innerHTML = `${isCommand ? '<span style="color:#f59e0b;">> CMD:</span>' : '<span style="color:#22c55e;">> DATA:</span>'} <pre>${JSON.stringify(entry, null, 2)}</pre>`;
     log.prepend(row);
     if (log.children.length > 50) log.removeChild(log.lastChild);
 }
@@ -156,107 +285,39 @@ function appendRawLog(entry, isCommand = false) {
 function updateSensor(id, val) {
     const config = SENSORS_REGISTRY.find(s => s.id === id);
     if (!config) return;
-
     const valStr = typeof val === 'number' ? val.toFixed(1) : val;
-    
     const elPrim = document.getElementById(`val-${id}`);
-    const elSec = document.getElementById(`val-sec-${id}`);
     if (elPrim) elPrim.innerText = valStr;
-    if (elSec) elSec.innerText = valStr;
-
-    const miniVal = document.getElementById(`mini-val-${id}`);
-    if (miniVal) miniVal.innerHTML = `${valStr} <span style="font-size:9px;color:#555">${config.unit}</span>`;
-
+    if (document.getElementById(`val-sec-${id}`)) document.getElementById(`val-sec-${id}`).innerText = valStr;
+    if (document.getElementById(`mini-val-${id}`)) document.getElementById(`mini-val-${id}`).innerHTML = `${valStr} <span style="font-size:9px;color:#555">${config.unit}</span>`;
+    
     const bar = document.getElementById(`bar-${id}`);
     if (bar && typeof val === 'number') {
         let pct = ((val - config.min) / (config.max - config.min)) * 100;
-        pct = Math.max(0, Math.min(100, pct));
-        bar.style.width = `${pct}%`;
+        bar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
         bar.style.background = (val < config.min || val > config.max) ? '#ef4444' : '#22c55e';
     }
-
-    const card = document.getElementById(`card-${id}`);
-    const statusEl = document.getElementById(`status-${id}`);
     
-    let state = "NORMAL"; let cssClass = "status-ok"; let isCrit = false;
-
-    if (val > config.max || val < config.min) {
-        state = "CRITICAL"; cssClass = "status-crit"; isCrit = true;
-        if (!systemState.criticalSensors.has(id)) {
-            systemState.criticalSensors.add(id);
-            addLog(`Critical Alarm: ${config.label} reads a value beyond safe thresholds.`, "#ef4444");
-        }
-    } else {
-        if (systemState.criticalSensors.has(id)) {
-            systemState.criticalSensors.delete(id);
-            addLog(`Recovery: ${config.label} returned to nominal parameters.`, "#22c55e");
-        }
+    const card = document.getElementById(`card-${id}`);
+    const isCrit = (val > config.max || val < config.min);
+    if (card) isCrit ? card.classList.add('card-alert') : card.classList.remove('card-alert');
+    if (document.getElementById(`status-${id}`)) {
+        document.getElementById(`status-${id}`).innerText = isCrit ? "● CRITICAL" : "● NORMAL";
+        document.getElementById(`status-${id}`).className = `status-label ${isCrit ? 'status-crit' : 'status-ok'}`;
     }
-
-    if (statusEl) {
-        statusEl.innerText = `● ${state}`;
-        statusEl.className = `status-label ${cssClass}`;
-    }
-    if (card) {
-        if (isCrit) card.classList.add('card-alert');
-        else card.classList.remove('card-alert');
-    }
-    const banner = document.getElementById('critical-banner');
-    if (banner) banner.style.display = document.querySelector('.card-alert') ? 'block' : 'none';
+    document.getElementById('critical-banner').style.display = document.querySelector('.card-alert') ? 'block' : 'none';
 }
 
 function syncActuator(id, rawState) {
-    let newState = String(rawState).toUpperCase();
-    if (newState === "TRUE" || newState === "ON" || newState === "1") newState = "ON";
-    else newState = "OFF";
-
+    let newState = (String(rawState).toUpperCase() === "ON" || rawState === true) ? "ON" : "OFF";
     const toggle = document.getElementById(`toggle-${id}`);
-    if (toggle) {
-        toggle.checked = (newState === "ON"); toggle.disabled = false; 
-        if (toggle.nextElementSibling) toggle.nextElementSibling.style.opacity = "1"; 
-    }
-    const statusText = document.getElementById(`status-text-${id}`);
-    if (statusText) {
-        const color = (newState === "ON") ? "#22c55e" : "#555"; 
-        statusText.innerHTML = `STATUS: <span style="color: ${color}">${newState}</span>`;
-    }
-    if (systemState.actuators[id] !== newState && systemState.booted) {
-        systemState.actuators[id] = newState;
-        addLog(`System Confirmed: ${id} is ${newState}`, "#f59e0b");
-    } else {
-        systemState.actuators[id] = newState;
-    }
-    document.body.style.cursor = 'default';
+    if (toggle) { toggle.checked = (newState === "ON"); toggle.disabled = false; }
+    const txt = document.getElementById(`status-text-${id}`);
+    if (txt) { txt.innerHTML = `STATUS: <span style="color: ${newState==="ON"?"#22c55e":"#555"}">${newState}</span>`; }
 }
 
 async function forceRefresh(id, event) {
     event.stopPropagation();
-    const config = SENSORS_REGISTRY.find(s => s.id === id);
-    if(!config || !config.simId) return;
-
-    const btn = event.currentTarget; const originalText = btn.innerHTML;
-    btn.innerHTML = "WAIT..."; btn.style.opacity = "0.7";
-
-    try {
-        const res = await fetch(`${ENDPOINTS.SIMULATOR}/${config.simId}`);
-        if (!res.ok) throw new Error("Net Error");
-        const data = await res.json();
-        let val = 0;
-        if (data.measurements) {
-            const match = data.measurements.find(m => id.includes(m.name) || id.includes(m.metric));
-            if (match) val = match.value; else val = data.measurements[0].value;
-        } else {
-            const exactKey = id.replace(config.simId + '_', ''); 
-            if (data[exactKey] !== undefined) val = data[exactKey];
-            else val = data.value || data.level || data.concentration || data.ph || 0;
-        }
-        updateSensor(id, val);
-        addLog(`Manual Fetch: ${config.label} reads ${val.toFixed(1)} ${config.unit}`, "#f59e0b");
-    } catch(e) {
-        addLog(`Error: Manual fetch for ${config.label} failed.`, "#ef4444");
-    } finally {
-        btn.innerHTML = originalText; btn.style.opacity = "1";
-    }
 }
 
 async function manualToggle(id, isChecked) {
@@ -265,25 +326,12 @@ async function manualToggle(id, isChecked) {
     toggle.checked = currentState; toggle.disabled = true;
     if (toggle.nextElementSibling) toggle.nextElementSibling.style.opacity = "0.5";
     document.body.style.cursor = 'wait';
-
     const newState = isChecked ? "ON" : "OFF";
     addLog(`Manual CMD: Transmitting ${newState} to ${id}...`, "#3b82f6");
-
     const payload = { state: newState };
-    
-    appendRawLog({
-        command_id: "cmd-" + Math.random().toString(36).substr(2, 9),
-        timestamp: new Date().toISOString(),
-        target: { actuator_id: id, action: newState },
-        issued_by: "manual_override",
-        payload: payload
-    }, true);
-    
+    appendRawLog({ command_id: "cmd-" + Math.random().toString(36).substr(2, 9), timestamp: new Date().toISOString(), target: { actuator_id: id, action: newState }, issued_by: "manual_override", payload: payload }, true);
     try {
-        await fetch(`${ENDPOINTS.API}/${id}`, {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ state: newState })
-        });
+        await fetch(`${ENDPOINTS.API}/${id}`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ state: newState }) });
     } catch (e) {
         addLog(`Link Failure: ${id} command lost.`, "#ef4444");
         toggle.disabled = false;
@@ -294,129 +342,25 @@ async function manualToggle(id, isChecked) {
 
 function checkBootSequence() {
     if (systemState.booted) return;
-    const count = systemState.sensorsReceived.size; const total = SENSORS_REGISTRY.length;
-    const bar = document.getElementById('boot-progress'); const log = document.getElementById('boot-log');
-
-    if (bar) bar.style.width = `${(count / total) * 100}%`;
-    if (log) log.innerHTML = `Loading Modules<span class="bouncing-dots"><span>.</span><span>.</span><span>.</span></span> (${count}/${total})`;
-
-    if (count >= 5) {
+    if (systemState.sensorsReceived.size >= 5) {
         systemState.booted = true;
-        const elapsed = Date.now() - bootStartTime;
-        const remaining = Math.max(0, 2000 - elapsed);
-        setTimeout(() => {
-            const overlay = document.getElementById('boot-overlay');
-            if (overlay) {
-                overlay.style.opacity = '0';
-                setTimeout(() => { 
-                    overlay.style.display = 'none'; document.body.classList.remove('no-scroll');
-                    addLog("AresGuard Online. Mission Active.", "#22c55e");
-                }, 800);
-            }
-        }, remaining);
+        setTimeout(() => { document.getElementById('boot-overlay').style.display = 'none'; document.body.classList.remove('no-scroll'); }, 800);
     }
 }
 
-function toggleCardView(id) { 
-    const card = document.getElementById(`card-${id}`);
-    if (card) card.classList.toggle('active-view'); 
+function toggleCardView(id) { document.getElementById(`card-${id}`).classList.toggle('active-view'); }
+function addLog(msg, color) { 
+    const log = document.getElementById('log-console'); 
+    if(log) log.innerHTML = `<div><span style="color:#555">[${new Date().toLocaleTimeString()}]</span> <span style="color:${color}">${msg}</span></div>` + log.innerHTML; 
 }
-
-function addLog(msg, color) {
-    const log = document.getElementById('log-console');
-    if (!log) return;
-    const row = document.createElement('div');
-    row.innerHTML = `<span style="color:#555">[${new Date().toLocaleTimeString()}]</span> <span style="color:${color}">${msg}</span>`;
-    log.prepend(row);
-}
-
 function setRole(role) {
-    const specView = document.getElementById('specialist-view');
-    const engView = document.getElementById('engineer-view');
-    const title = document.getElementById('main-title');
-
     document.getElementById('btn-role-specialist').classList.remove('active');
     document.getElementById('btn-role-engineer').classList.remove('active');
     document.getElementById(`btn-role-${role}`).classList.add('active');
-
-    if (role === 'specialist') {
-        document.body.classList.remove('engineer-mode');
-        specView.style.display = 'block';
-        engView.style.display = 'none';
-        title.innerText = "ARESGUARD: MISSION CONTROL";
-    } else {
-        document.body.classList.add('engineer-mode'); 
-        specView.style.display = 'none';
-        engView.style.display = 'block';
-        title.innerText = "ARESGUARD: AUTOMATION ENGINE";
-        fetchRules(); 
-    }
-}
-
-async function fetchRules() {
-    try {
-        const res = await fetch(ENDPOINTS.RULES);
-        if(!res.ok) throw new Error();
-        const rules = await res.json();
-        renderRules(rules);
-    } catch (e) {
-        document.getElementById('rules-tbody').innerHTML = `<tr><td colspan="4" style="text-align:center; color:#ef4444;">Could not fetch rules from database. Ensure Rule Engine Backend is running.</td></tr>`;
-    }
-}
-
-function renderRules(rules) {
-    const tbody = document.getElementById('rules-tbody');
-    if (!tbody) return;
-    if (rules.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;">No automation rules found. System is in manual mode.</td></tr>`;
-        return;
-    }
-    tbody.innerHTML = rules.map(r => `
-        <tr>
-            <td style="color:#f59e0b;">${r.rule_id}</td>
-            <td>IF <strong>${r.sensor_id}</strong> ${r.operator} ${r.threshold}</td>
-            <td>SET <strong>${r.actuator_id}</strong> to <span style="color:${r.action === 'ON' ? '#22c55e' : '#555'}; font-weight:bold;">${r.action}</span></td>
-            <td>
-                <button class="btn-del" onclick="deleteRule('${r.rule_id}')">\\ DELETE</button>
-            </td>
-        </tr>
-    `).join('');
-}
-
-async function saveRule() {
-    const sensor = document.getElementById('rule-sensor').value;
-    const operator = document.getElementById('rule-operator').value;
-    const threshold = parseFloat(document.getElementById('rule-value').value);
-    const actuator = document.getElementById('rule-actuator').value;
-    const action = document.getElementById('rule-action').value;
-    
-    if (isNaN(threshold)) { alert("Please enter a valid numeric threshold."); return; }
-    
-    const rule = { sensor_id: sensor, operator: operator, threshold: threshold, actuator_id: actuator, action: action };
-    
-    try {
-        const res = await fetch(ENDPOINTS.RULES, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(rule)
-        });
-        if(!res.ok) throw new Error();
-        fetchRules();
-        addLog(`New Rule Applied for ${sensor}`, "#22c55e");
-    } catch (e) {
-        alert("Failed to save rule. Check backend connection.");
-    }
-}
-
-async function deleteRule(id) {
-    if(!confirm(`Delete rule ${id}?`)) return;
-    try {
-        await fetch(`${ENDPOINTS.RULES}/${id}`, { method: 'DELETE' });
-        fetchRules();
-        addLog(`Rule ${id} removed.`, "#ef4444");
-    } catch (e) {
-        console.error("Failed to delete rule", e);
-    }
+    document.getElementById('specialist-view').style.display = role === 'specialist' ? 'block' : 'none';
+    document.getElementById('engineer-view').style.display = role === 'engineer' ? 'block' : 'none';
+    document.getElementById('main-title').innerText = role === 'specialist' ? "ARESGUARD: MISSION CONTROL" : "ARESGUARD: AUTOMATION ENGINE";
+    if (role === 'engineer') fetchRules();
 }
 
 window.onload = initMissionControl;

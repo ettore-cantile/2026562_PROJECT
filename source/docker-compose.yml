@@ -89,7 +89,8 @@ services:
         condition: service_healthy
     networks:
       - aresguard_net 
-
+    ports:
+      - "8001:8000"
   api_gateway:
       build: ./api_gateway
       container_name: aresguard_api_gateway

@@ -597,3 +597,19 @@ body.engineer-mode #critical-banner {
     border-left: 1px solid #333;
     padding-left: 10px; 
 }
+
+/* Aggiungi questo in fondo al file css */
+.btn-edit {
+    background: #3b82f6; /* Blu */
+    color: #fff;
+    border: none;
+    padding: 5px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 9px;
+    font-weight: bold;
+    margin-right: 5px; /* Spazio tra Edit e Delete */
+}
+.btn-edit:hover {
+    background: #2563eb;
+}
