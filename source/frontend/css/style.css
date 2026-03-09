@@ -515,9 +515,6 @@ input:checked + .slider:before { transform: translateX(18px); background: white;
 .boot-terminal { max-width: 90%; }
 .role-switcher { flex-wrap: wrap; justify-content: center; }
 
-/* --- LOG EXPANSION STYLES --- */
-
-/* Stile del bottone "EXPAND" */
 .expand-btn {
     background: transparent;
     border: 1px solid #444;

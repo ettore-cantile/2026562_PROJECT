@@ -765,7 +765,6 @@ function toggleCardView(id) {
     if (card) card.classList.toggle('active-view'); 
 }
 
-// --- LOG EXPANSION LOGIC ---
 function toggleLogSize(logId, btnId) {
     const log = document.getElementById(logId);
     const btn = document.getElementById(btnId);
